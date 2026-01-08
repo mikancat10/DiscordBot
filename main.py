@@ -7,21 +7,22 @@ import requests
 import threading
 import xml.etree.ElementTree as ET
 from flask import Flask
-import openai  # AI会話用
+from openai import OpenAI  # 最新のOpenAIクライアント
 
 # --- 1. 設定と環境変数 ---
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# OpenAIクライアントの初期化
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def get_id(key):
     val = os.getenv(key)
     return int(val) if val and val.isdigit() else None
 
 CH_IDS = {
-    "news": get_id("CH_NEWS"),      # 天気・ニュース・宣伝用
-    "greeting": get_id("CH_GREETING"), # 挨拶用
-    "log": get_id("CH_LOG"),        # VC入退室ログ用
-    "welcome": get_id("CH_WELCOME"),  # 新規入会メッセージ用
+    "news": get_id("CH_NEWS"),      
+    "greeting": get_id("CH_GREETING"), 
+    "log": get_id("CH_LOG"),        
+    "welcome": get_id("CH_WELCOME"),  
 }
 
 # --- 2. Flask (稼働維持用) ---
@@ -41,7 +42,7 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.tree.sync()
         self.scheduled_task.start()
-        self.scratch_promotion.start() # 1時間おきの宣伝開始
+        self.scratch_promotion.start()
 
     async def on_ready(self):
         print(f"✅ ログイン成功: {self.user.name}")
@@ -57,14 +58,12 @@ class MyBot(commands.Bot):
             ch = self.get_channel(CH_IDS["news"])
             if ch:
                 msg = "🌅 **おはようございます！今日の天気とニュースです**\n"
-                # 天気取得 (東京の例)
                 try:
                     res = requests.get("https://www.jma.go.jp/bosai/forecast/data/forecast/130000.json").json()
                     weather = res[0]['timeSeries'][0]['areas'][0]['weathers'][0]
-                    msg += f"☁️ 今日の天気: {weather}\n"
-                except: msg += "⚠️ 天気情報の取得に失敗しました。\n"
+                    msg += f"☁️ 東京の天気: {weather}\n"
+                except: msg += "⚠️ 天気取得エラー\n"
                 
-                # ニュース取得
                 try:
                     res = requests.get("https://news.google.com/rss?hl=ja&gl=JP&ceid=JP:ja")
                     root = ET.fromstring(res.text)
@@ -86,51 +85,46 @@ class MyBot(commands.Bot):
             ch = self.get_channel(CH_IDS["news"])
             if ch:
                 try:
-                    # Scratchの「傾向」からランダムに1つ取得する例
                     res = requests.get("https://api.scratch.mit.edu/explore/projects?limit=1&mode=trending&q=*").json()
                     project = res[0]
-                    p_id = project['id']
-                    p_title = project['title']
-                    await ch.send(f"🚀 **Scratchおすすめプロジェクト紹介**\n「{p_title}」\nhttps://scratch.mit.edu/projects/{p_id}/")
+                    await ch.send(f"🚀 **Scratchおすすめ作品**\n「{project['title']}」\nhttps://scratch.mit.edu/projects/{project['id']}/")
                 except: pass
 
-    # --- C. VC入退室確認ログ ---
+    # --- C. VC入退室ログ ---
     async def on_voice_state_update(self, member, before, after):
         ch = self.get_channel(CH_IDS["log"])
         if not ch: return
         if before.channel is None and after.channel is not None:
-            await ch.send(f"🎤 **{member.display_name}** が `{after.channel.name}` に参加しました。")
+            await ch.send(f"🎤 **{member.display_name}** が `{after.channel.name}` に入室")
         elif before.channel is not None and after.channel is None:
-            await ch.send(f"👋 **{member.display_name}** が退出しました。")
+            await ch.send(f"👋 **{member.display_name}** が退室")
 
-    # --- D. 新規メンバーへのメッセージ (個人 & 通常) ---
+    # --- D. 新規メンバーへの通知 ---
     async def on_member_join(self, member):
-        # サーバー内メッセージ
         ch = self.get_channel(CH_IDS["welcome"])
         if ch: await ch.send(f"🎊 {member.mention} さん、サーバーへようこそ！")
-        # 個人メッセージ (DM)
         try:
-            await member.send(f"こんにちは！{member.guild.name}へようこそ！楽しんでいってくださいね。")
-        except: print(f"{member.name} へのDM送信に失敗しました（ブロック等）")
+            await member.send(f"こんにちは！{member.guild.name}へようこそ！")
+        except: pass
 
-# --- 4. コマンド定義 ---
+# --- 4. 実行 ---
 bot = MyBot()
 
-# AI会話機能 (/chat)
-@bot.tree.command(name="chat", description="AIと会話します")
+# AI会話コマンド (GPT-4o-mini使用)
+@bot.tree.command(name="chat", description="GPT-4o-miniと会話します")
 async def chat(interaction: discord.Interaction, メッセージ: str):
-    await interaction.response.defer() # 処理に時間がかかるので保留
+    await interaction.response.defer()
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+        # 最新のAPI形式
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": メッセージ}]
         )
         answer = response.choices[0].message.content
-        await interaction.followup.send(f"🗨️ **AIの回答:**\n{answer}")
+        await interaction.followup.send(f"🗨️ **AI(GPT-4o-mini)の回答:**\n{answer}")
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラーが発生しました: {e}")
 
-# --- 5. 実行 ---
 if __name__ == "__main__":
     t = threading.Thread(target=run_web, daemon=True)
     t.start()
