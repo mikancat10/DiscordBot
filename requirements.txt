@@ -1,4 +1,4 @@
 discord.py
 requests
 flask
-openai
+openai==0.28
